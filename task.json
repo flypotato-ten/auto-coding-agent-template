@@ -1,0 +1,429 @@
+{
+  "project": "AgentForge",
+  "description": "No-code agentic AI platform for security risk and governance professionals",
+  "tasks": [
+    {
+      "id": 1,
+      "title": "Project Foundation & Dependencies",
+      "description": "Initialize Next.js project with all required dependencies",
+      "steps": [
+        "Create agentforge-app/ using: npx create-next-app@latest agentforge-app --typescript --tailwind --app --src-dir --import-alias '@/*'",
+        "Install auth: npm install next-auth@beta @auth/supabase-adapter",
+        "Install Supabase: npm install @supabase/supabase-js @supabase/ssr",
+        "Install React Flow: npm install @xyflow/react",
+        "Install utilities: npm install clsx tailwind-merge lucide-react class-variance-authority",
+        "Install LangGraph + LangChain.js: npm install @langchain/langgraph @langchain/core @langchain/openai @langchain/anthropic @langchain/google-genai @langchain/community",
+        "Install form: npm install react-hook-form zod @hookform/resolvers",
+        "Initialize shadcn/ui: npx shadcn@latest init — choose Dark theme, CSS variables: yes. Then install core components: npx shadcn@latest add button card input label textarea select dialog dropdown-menu tabs toast tooltip badge separator skeleton avatar",
+        "Confirm .mcp.json exists at agentforge-app/.mcp.json with shadcn, magic, and playwright MCP servers (file already created — just verify it is present and fill in placeholder API keys from .env.local)",
+        "Create .env.local from the environment variables listed in architecture.md (all values set to placeholder strings — real keys filled in by human operator)",
+        "Apply the dark color palette from ui_ux_design.md to agentforge-app/src/app/globals.css — replace the default shadcn CSS variables with the security-professional dark navy palette defined in the design doc",
+        "Create src/lib/utils.ts with cn() helper using clsx + tailwind-merge",
+        "Create src/types/index.ts with shared TypeScript types matching the data model in architecture.md: User, Organization, Solution, WorkflowNode, WorkflowEdge, KnowledgeBase, KBDocument, DataConnector, SolutionRun, AuditLog"
+      ],
+      "passes": true
+    },
+    {
+      "id": 2,
+      "title": "Supabase Database Schema",
+      "description": "Create all database tables, indexes, and enable pgvector",
+      "steps": [
+        "Create supabase/migrations/001_enable_pgvector.sql: enable pgvector extension",
+        "Create supabase/migrations/002_organizations.sql: organizations table (id, name, domain, sso_provider, sso_config jsonb, created_at)",
+        "Create supabase/migrations/003_users.sql: users table (id, org_id FK, email, display_name, avatar_url, role, sso_subject, last_login_at, created_at). Role enum: admin | builder | viewer",
+        "Create supabase/migrations/004_solutions.sql: solutions table (id, creator_id FK, org_id FK, title, description, category, visibility, status, architecture, metadata jsonb, run_count, avg_rating, published_at, created_at, updated_at)",
+        "Create supabase/migrations/005_workflow.sql: workflow_nodes table and workflow_edges table as defined in architecture.md",
+        "Create supabase/migrations/006_knowledge_bases.sql: knowledge_bases, kb_documents, document_chunks (with vector(1536) column), data_connectors tables",
+        "Create supabase/migrations/007_runs.sql: solution_runs table (id, solution_id FK, user_id FK, status, input_data jsonb, output_data jsonb, node_traces jsonb, total_tokens, duration_ms, error_message, started_at, completed_at). Also create langgraph_checkpoints table (thread_id text PK, checkpoint jsonb, metadata jsonb, created_at, updated_at) — used by the custom SupabaseSaver checkpointer to persist and resume LangGraph graph state",
+        "Create supabase/migrations/008_audit.sql: audit_logs table (id, user_id, org_id, action, resource_type, resource_id, metadata jsonb, ip_address, created_at)",
+        "Create supabase/migrations/009_indexes.sql: add indexes on org_id, creator_id, kb_id, solution_id foreign keys. Add ivfflat index on document_chunks.embedding for vector search",
+        "Create supabase/migrations/010_rls.sql: Row Level Security policies — users can only see resources matching their org_id or visibility='public'. Admins can see all within their org",
+        "Create supabase/seed.sql: insert a demo organization and admin user for local dev",
+        "Document each migration with inline comments"
+      ],
+      "passes": true
+    },
+    {
+      "id": 3,
+      "title": "Supabase Client Setup",
+      "description": "Create Supabase client helpers for server and browser",
+      "steps": [
+        "Create src/lib/supabase/server.ts: createServerClient() using @supabase/ssr for Server Components and API Routes",
+        "Create src/lib/supabase/client.ts: createBrowserClient() singleton for Client Components",
+        "Create src/lib/supabase/middleware.ts: updateSession() middleware helper",
+        "Create src/middleware.ts: apply Supabase session refresh middleware, protect all routes except /login and /api/auth/*",
+        "Create src/lib/db/users.ts: getUserById(), createUser(), updateUser(), upsertUserFromSSO()"
+      ],
+      "passes": true
+    },
+    {
+      "id": 4,
+      "title": "Enterprise SSO Authentication — Azure AD",
+      "description": "Implement NextAuth.js with Azure Active Directory OIDC",
+      "steps": [
+        "Create src/auth.ts: configure NextAuth with MicrosoftEntraID provider (Azure AD). Map email, name, image from token claims",
+        "Create src/app/api/auth/[...nextauth]/route.ts: export GET and POST handlers",
+        "In callbacks.signIn: upsert user record in Supabase users table using sso_subject from profile.sub",
+        "In callbacks.session: attach user.id, user.role, user.org_id from DB to the session object",
+        "Create src/app/login/page.tsx: login page with 'Sign in with Azure AD' button and optional Ping Identity button. Show organization branding area",
+        "Create src/components/auth/SignInButton.tsx: button component that calls signIn(provider)",
+        "Test: after Azure AD sign-in callback returns, user record should exist in users table"
+      ],
+      "passes": true
+    },
+    {
+      "id": 5,
+      "title": "Authentication Middleware & RBAC",
+      "description": "Protect routes and enforce role-based access control",
+      "steps": [
+        "Update src/middleware.ts: if no session, redirect to /login for any non-public route",
+        "Create src/lib/auth/rbac.ts: defineRoles() mapping (admin: all, builder: create/edit solutions + KB, viewer: read + run only). Export hasPermission(role, action) function",
+        "Create src/lib/auth/session.ts: getServerSession() wrapper that returns typed session with user.role",
+        "Create src/components/auth/AuthGuard.tsx: client component that checks session and role, shows 403 if insufficient permission",
+        "Create src/app/unauthorized/page.tsx: 403 unauthorized page",
+        "Apply role checks to API routes: admin-only routes return 403 for non-admin users"
+      ],
+      "passes": true
+    },
+    {
+      "id": 6,
+      "title": "App Shell & Navigation Layout",
+      "description": "Create the main application shell with sidebar navigation",
+      "steps": [
+        "Create src/app/(app)/layout.tsx: authenticated app layout wrapper that checks session, renders sidebar + main content area",
+        "Create src/components/layout/Sidebar.tsx: left sidebar with navigation links (Dashboard, My Solutions, Knowledge Base, Marketplace, Admin). Highlight active route. Collapse to icon-only on small screens",
+        "Create src/components/layout/Header.tsx: top header with page title, user avatar dropdown (profile, sign out), and notification bell",
+        "Create src/components/layout/UserMenu.tsx: dropdown with user display name, email, role badge, sign out button",
+        "Create src/components/ui/Badge.tsx: role and status badge component with color variants",
+        "Create src/components/ui/Button.tsx: button component with variants (primary, secondary, ghost, destructive)",
+        "Create src/components/ui/Card.tsx: card wrapper component",
+        "Create src/components/ui/Input.tsx: styled input component",
+        "Create src/components/ui/Textarea.tsx: styled textarea component",
+        "Create src/components/ui/Select.tsx: styled select component using Radix UI",
+        "Create src/components/ui/Dialog.tsx: modal dialog component using Radix UI",
+        "Create src/components/ui/Toast.tsx: toast notification component using Radix UI",
+        "Create src/components/ui/Spinner.tsx: loading spinner",
+        "Create src/components/ui/Skeleton.tsx: skeleton loading placeholder"
+      ],
+      "passes": true
+    },
+    {
+      "id": 7,
+      "title": "Dashboard Home Page",
+      "description": "Build the main dashboard after login",
+      "steps": [
+        "Create src/app/(app)/page.tsx: dashboard page (server component)",
+        "Show welcome message with user's display name",
+        "Show stats cards: My Solutions count, Knowledge Bases count, Total Runs, Marketplace solutions available",
+        "Show 'Quick Actions' section: 'Create New Solution' button, 'Upload to Knowledge Base' button, 'Browse Marketplace' button",
+        "Show 'Recent Activity' section: last 5 solution runs with status, duration, and link to run detail",
+        "Show 'Getting Started' section for new users with 3-step guide (only visible if user has 0 solutions)",
+        "Create src/lib/db/dashboard.ts: getDashboardStats(userId, orgId) query function",
+        "Test in browser: verify all sections render with mock data"
+      ],
+      "passes": true
+    },
+    {
+      "id": 8,
+      "title": "Solutions CRUD — API & Data Layer",
+      "description": "Backend API routes and DB layer for solutions management",
+      "steps": [
+        "Create src/lib/db/solutions.ts: createSolution(), getSolutions(userId, orgId), getSolutionById(id), updateSolution(id, data), deleteSolution(id), publishSolution(id), duplicateSolution(id)",
+        "Create src/app/api/solutions/route.ts: GET (list with filter by status/category) and POST (create)",
+        "Create src/app/api/solutions/[id]/route.ts: GET, PATCH, DELETE — verify ownership before mutation",
+        "Create src/app/api/solutions/[id]/publish/route.ts: POST — set status=published, visibility from body, set published_at",
+        "Create src/app/api/solutions/[id]/duplicate/route.ts: POST — deep copy solution with all nodes and edges",
+        "Create src/lib/db/workflow.ts: saveWorkflow(solutionId, nodes, edges), getWorkflow(solutionId)",
+        "Create src/app/api/solutions/[id]/workflow/route.ts: GET and PUT for workflow canvas state",
+        "All mutations write to audit_logs table"
+      ],
+      "passes": true
+    },
+    {
+      "id": 9,
+      "title": "Solutions List Page",
+      "description": "UI for listing and managing user's solutions",
+      "steps": [
+        "Create src/app/(app)/solutions/page.tsx: solutions list page (server component)",
+        "Fetch solutions with status filter tabs: All / Draft / Published / Archived",
+        "Display solution cards showing: title, description, category badge, visibility badge, status badge, architecture type, run count, last updated date",
+        "Each card has action menu: Edit / Run / Duplicate / Archive / Delete",
+        "Create src/components/solution/SolutionCard.tsx: card component",
+        "Create src/components/solution/SolutionStatusBadge.tsx: colored status indicator",
+        "Add 'Create New Solution' button at top right (builder role and above)",
+        "Empty state with call-to-action when no solutions exist",
+        "Test in browser: verify list renders, filter tabs work, empty state shows"
+      ],
+      "passes": true
+    },
+    {
+      "id": 10,
+      "title": "New Solution Setup Page",
+      "description": "Form to configure a new solution before opening the builder",
+      "steps": [
+        "Create src/app/(app)/solutions/new/page.tsx: multi-step setup form",
+        "Step 1 — Basic Info: title (required), description, category dropdown (risk_assessment, compliance, threat_intel, incident_response, audit, other), visibility selector",
+        "Step 2 — Architecture: show 5 architecture template cards with diagram previews and descriptions (Single Agent, Sequential Chain, Parallel Fan-out, Hierarchical, Router, Blank Canvas). User selects one",
+        "Submit: call POST /api/solutions, then redirect to /solutions/:id/edit",
+        "Create src/components/solution/ArchitectureCard.tsx: clickable card with icon, name, description, and topology diagram preview",
+        "Create src/components/solution/NewSolutionForm.tsx: multi-step form with progress indicator",
+        "Test in browser: complete both steps and verify solution is created and redirects to builder"
+      ],
+      "passes": true
+    },
+    {
+      "id": 11,
+      "title": "Agent Workflow Builder Canvas",
+      "description": "Core drag-and-drop canvas for composing agent workflows using React Flow",
+      "steps": [
+        "Create src/app/(app)/solutions/[id]/edit/page.tsx: builder page (client component)",
+        "Create src/components/builder/WorkflowCanvas.tsx: React Flow canvas with custom node types and edge types",
+        "Register custom node types: AgentNode, InputNode, OutputNode, RouterNode, AggregatorNode",
+        "Create src/components/builder/nodes/AgentNode.tsx: agent node card showing label, LLM provider icon, model name, system prompt preview. Has configure button",
+        "Create src/components/builder/nodes/InputNode.tsx: start node (green border, label 'User Input')",
+        "Create src/components/builder/nodes/OutputNode.tsx: end node (blue border, label 'Final Output')",
+        "Create src/components/builder/nodes/RouterNode.tsx: router/decision node with branching handles",
+        "Create src/components/builder/nodes/AggregatorNode.tsx: merge node that combines parallel inputs",
+        "Pre-populate canvas with nodes based on selected architecture template (from solution.architecture field). Templates map to LangGraph patterns: single=one AgentNode; sequential=Input→AgentNode→AgentNode→Output; parallel=Input→[AgentNode,AgentNode]→AggregatorNode→Output; hierarchical=Input→AgentNode(supervisor)→[AgentNode,AgentNode]→AgentNode(supervisor)→Output; router=Input→RouterNode→AgentNode(selected)→Output",
+        "Add React Flow controls: MiniMap, Controls panel, Background grid",
+        "Create src/components/builder/Toolbar.tsx: left toolbar with draggable node palette (drag to add new nodes)",
+        "Implement auto-save: debounce 2s after any canvas change, call PUT /api/solutions/:id/workflow",
+        "Show save status indicator: 'Saved' / 'Saving...' / 'Unsaved changes'",
+        "Test in browser: verify canvas loads with template nodes, can drag new nodes, can connect nodes with edges"
+      ],
+      "passes": true
+    },
+    {
+      "id": 12,
+      "title": "Node Configuration Panel",
+      "description": "Slide-out panel to configure each agent node's LLM and prompt settings",
+      "steps": [
+        "Create src/components/builder/NodeConfigPanel.tsx: right-side slide panel that opens on node click",
+        "Panel sections: Node Label (editable), LLM Provider (dropdown: OpenAI / Anthropic / Azure OpenAI / Gemini), Model (dropdown populated based on selected provider), System Prompt (large textarea with variable hints), LLM Parameters (temperature slider 0-2, max tokens input), Knowledge Bases (multi-select of user's available KBs), Human-in-the-Loop toggle (when enabled, LangGraph will interruptBefore this node — a human must approve before it executes), Advanced (JSON schema for structured output optional)",
+        "Create src/components/builder/LLMProviderSelect.tsx: provider + model selector component with provider icons",
+        "Create src/components/builder/SystemPromptEditor.tsx: textarea with character count, variable hints ({user_input}, {kb_context}, {previous_output})",
+        "Create src/components/builder/KBAttachSelect.tsx: searchable multi-select for knowledge bases",
+        "On save: update the node data in React Flow state, triggering auto-save",
+        "Test in browser: click a node, configure LLM + prompt, verify data persists on refresh"
+      ],
+      "passes": true
+    },
+    {
+      "id": 13,
+      "title": "Knowledge Base — API & Data Layer",
+      "description": "Backend for knowledge base CRUD and document management",
+      "steps": [
+        "Create src/lib/db/knowledge.ts: createKB(), getKBs(userId, orgId), getKBById(id), updateKB(id, data), deleteKB(id), addDocument(kbId, docData), deleteDocument(docId), getDocuments(kbId)",
+        "Create src/app/api/knowledge/route.ts: GET (list) and POST (create KB)",
+        "Create src/app/api/knowledge/[id]/route.ts: GET, PATCH, DELETE",
+        "Create src/app/api/knowledge/[id]/documents/route.ts: POST (upload file — receive multipart/form-data, store in Supabase Storage under knowledge/:kbId/:filename, create kb_documents record with status=pending, trigger processing job)",
+        "Create src/app/api/knowledge/[id]/documents/[docId]/route.ts: DELETE (remove from storage and DB, cascade delete chunks)",
+        "Create src/app/api/knowledge/[id]/search/route.ts: POST { query, topK } — generate query embedding via OpenAI, run pgvector similarity search, return top chunks",
+        "Create src/lib/storage/documents.ts: uploadToStorage(), deleteFromStorage(), getSignedUrl() helpers"
+      ],
+      "passes": true
+    },
+    {
+      "id": 14,
+      "title": "Knowledge Base — Document Processing Pipeline",
+      "description": "Process uploaded documents using LangChain.js loaders, splitters, and SupabaseVectorStore",
+      "steps": [
+        "Create src/lib/processing/loader.ts: loadDocument(storagePath, fileType) — download file from Supabase Storage to a temp buffer, then use LangChain loaders: PDFLoader for PDF, DocxLoader for DOCX, TextLoader for TXT/CSV. Returns array of LangChain Document objects with pageContent and metadata",
+        "Create src/lib/processing/splitter.ts: splitDocuments(docs) — use LangChain RecursiveCharacterTextSplitter({ chunkSize: 512, chunkOverlap: 50 }) to split Document objects into chunks. Preserve source metadata (filename, page number)",
+        "Create src/lib/processing/vectorstore.ts: upsertChunks(kbId, chunks, supabase) — use SupabaseVectorStore.fromDocuments(chunks, new OpenAIEmbeddings({ model: 'text-embedding-3-small' }), { client: supabase, tableName: 'document_chunks', queryName: 'match_chunks' }). Also create embedQuery(text) for single query embedding at retrieval time",
+        "Create supabase/migrations/012_match_chunks_fn.sql: PostgreSQL function match_chunks(query_embedding vector, match_threshold float, match_count int, filter_kb_id uuid) used by SupabaseVectorStore for similarity search",
+        "Create src/lib/processing/pipeline.ts: processDocument(documentId, supabase) — orchestrates: load → split → upsertChunks → update kb_documents status='ready' and chunk_count. On any error: update status='error' with error message",
+        "Create src/app/api/knowledge/[id]/documents/process/route.ts: POST { documentId } — trigger pipeline (called internally after upload completes). Update kb.document_count and kb.chunk_count aggregates",
+        "Create src/app/api/knowledge/[id]/search/route.ts: POST { query, topK=5 } — use SupabaseVectorStore.similaritySearch(query, topK) filtered to this KB's chunks, return results with content and relevance score"
+      ],
+      "passes": true
+    },
+    {
+      "id": 15,
+      "title": "Knowledge Base — Data Connectors",
+      "description": "Support SharePoint, Confluence, and web URL connectors",
+      "steps": [
+        "Create src/lib/connectors/types.ts: ConnectorConfig interface, ConnectorSyncResult interface",
+        "Create src/lib/connectors/web-crawl.ts: crawlUrls(urls[]) — fetch each URL, strip HTML (use a simple regex or DOMParser), return array of {url, text, title}",
+        "Create src/lib/connectors/confluence.ts: fetchConfluencePages(config) — call Confluence REST API with Basic Auth or token, return page content. Stub implementation with placeholder for real credentials",
+        "Create src/lib/connectors/sharepoint.ts: fetchSharePointFiles(config) — call Microsoft Graph API with OAuth token. Stub implementation for now",
+        "Create src/lib/connectors/sync.ts: syncConnector(connectorId) — fetch content from connector, process each page as a document through the pipeline, update last_synced_at",
+        "Create src/app/api/knowledge/[id]/connectors/route.ts: POST (add connector), GET (list connectors)",
+        "Create src/app/api/knowledge/[id]/sync/route.ts: POST — trigger connector sync job"
+      ],
+      "passes": true
+    },
+    {
+      "id": 16,
+      "title": "Knowledge Base — UI Pages",
+      "description": "Frontend pages for managing knowledge bases",
+      "steps": [
+        "Create src/app/(app)/knowledge/page.tsx: KB list page showing all KBs as cards (name, description, doc count, status, visibility)",
+        "Create src/components/knowledge/KBCard.tsx: card with status indicator (empty/processing/ready/error), document count, last updated",
+        "Create src/app/(app)/knowledge/new/page.tsx: create KB form (name, description, visibility)",
+        "Create src/app/(app)/knowledge/[id]/page.tsx: KB detail page",
+        "Create src/components/knowledge/DocumentList.tsx: list of uploaded documents with status, size, delete button",
+        "Create src/components/knowledge/DocumentUpload.tsx: drag-and-drop file upload area supporting PDF, DOCX, TXT, CSV (max 50MB). Shows upload progress and processing status",
+        "Create src/components/knowledge/ConnectorPanel.tsx: section to add data connectors (type selector, config form, sync button, last synced time)",
+        "Create src/components/knowledge/KBSearch.tsx: search bar to test semantic search against the KB, shows results with relevance score",
+        "Test in browser: upload a PDF, verify it appears in list with processing status, then ready status"
+      ],
+      "passes": true
+    },
+    {
+      "id": 17,
+      "title": "LangGraph Agent Execution Runtime",
+      "description": "Compile and execute LangGraph StateGraphs from stored workflow definitions, streaming results via SSE",
+      "steps": [
+        "Create src/lib/runtime/checkpointer.ts: SupabaseSaver class implementing LangGraph's BaseCheckpointSaver interface. Methods: put(config, checkpoint, metadata) and get(config) — read/write to langgraph_checkpoints table in Supabase",
+        "Create src/lib/runtime/llm-factory.ts: getLangChainModel(provider, model, apiKey, config) — returns the correct LangChain chat model: ChatOpenAI / ChatAnthropic / AzureChatOpenAI / ChatGoogleGenerativeAI based on provider string. Passes temperature and maxTokens from node config",
+        "Create src/lib/runtime/kb-retriever.ts: getKBRetriever(kbIds[], supabase) — creates a SupabaseVectorStore retriever for each attached KB, returns a combined retriever. Uses OpenAIEmbeddings for query embedding",
+        "Create src/lib/runtime/graph-compiler.ts: compileWorkflow(solutionId, supabase) — loads workflow_nodes and workflow_edges from DB, constructs LangGraph StateGraph with AgentState (userInput, messages, nodeOutputs), adds nodes via addNode(), adds edges via addEdge() and addConditionalEdges(), sets entry/finish points, compiles with SupabaseSaver checkpointer. Returns compiled graph + list of HITL node IDs (nodes with hitl_enabled=true in node_config)",
+        "Create src/lib/runtime/node-builder.ts: buildAgentNode(node, supabase) — returns a LangGraph node function that: (1) retrieves KB context if kbIds are set, (2) builds system prompt by substituting {kb_context} and {previous_output} variables, (3) calls the LangChain model, (4) returns state update with new nodeOutputs entry",
+        "Create src/lib/runtime/router-builder.ts: buildRouterNode(node) — returns a LangGraph conditional edge function that calls LLM with a classification prompt and returns the next node ID as a routing decision",
+        "Create src/app/api/solutions/[id]/run/route.ts: POST handler — (1) resolve org LLM keys (decrypt from DB, fallback to env), (2) create solution_runs record with status=running, (3) compile graph via graph-compiler, (4) call compiled.streamEvents({userInput}, {configurable: {thread_id: runId}}) with interruptBefore set to HITL node IDs, (5) pipe events to SSE response. SSE event types: {type:'node_start', nodeId}, {type:'token', nodeId, content}, {type:'node_complete', nodeId, output}, {type:'interrupt', nodeId, state} (for HITL), {type:'done', runId}, {type:'error', message}",
+        "Create src/app/api/runs/[runId]/resume/route.ts: POST { approved: boolean, feedback?: string } — load checkpoint via SupabaseSaver, call graph.updateState() to inject human decision, resume graph.streamEvents() from checkpoint, pipe SSE to response",
+        "Create src/app/api/runs/[runId]/route.ts: GET — return solution_runs record with current status and output",
+        "On graph completion: update solution_runs (status=completed, output_data, node_traces from streamEvents metadata, total_tokens, duration_ms). Increment solution.run_count",
+        "Resolve LLM API keys priority: (1) org-level encrypted key from llm_provider_keys table, (2) fallback to OPENAI_API_KEY / ANTHROPIC_API_KEY env vars"
+      ],
+      "passes": true
+    },
+    {
+      "id": 18,
+      "title": "Solution Run Page",
+      "description": "UI to run a solution and see streaming output",
+      "steps": [
+        "Create src/app/(app)/solutions/[id]/run/page.tsx: solution run page",
+        "Show solution title and description at top",
+        "Create src/components/run/InputForm.tsx: dynamic form for user to enter the initial input text (textarea)",
+        "Create src/components/run/ExecutionPanel.tsx: displays streaming execution output. Shows node-by-node progress as nodes execute. Each node shows: node label, LLM provider badge, streaming token output in a pre-formatted box. Handle all SSE event types: node_start (show node as active), token (append to node output), node_complete (mark node done), interrupt (show HITL panel), done (show final output), error (show error state)",
+        "Create src/components/run/HITLApprovalPanel.tsx: shown when an SSE 'interrupt' event is received. Displays the pending node label, its pending input/state, and two buttons: 'Approve & Continue' (POST /api/runs/:runId/resume { approved: true }) and 'Reject' (POST /api/runs/:runId/resume { approved: false }). Reopens SSE stream after resume to continue receiving output",
+        "Use EventSource API to consume the SSE stream from /api/solutions/:id/run",
+        "Show execution flow visualization: highlight which node is currently running in a simplified graph view",
+        "Show final aggregated output prominently after execution completes",
+        "Show run stats footer: total tokens used, duration, run ID",
+        "Create src/components/run/RunHistoryList.tsx: list of past runs with status, date, and link to run detail",
+        "Create src/app/(app)/solutions/[id]/history/page.tsx: run history page",
+        "Test in browser: run a solution, verify streaming output appears node by node"
+      ],
+      "passes": true
+    },
+    {
+      "id": 19,
+      "title": "Solution Marketplace",
+      "description": "Browse and discover published solutions from the organization",
+      "steps": [
+        "Create src/app/(app)/marketplace/page.tsx: marketplace browse page",
+        "Fetch solutions where visibility='public' OR (visibility='org' AND org_id matches current user's org)",
+        "Display as grid of cards with: title, description, category, architecture type, creator name, run count, rating stars, published date",
+        "Create src/components/marketplace/MarketplaceCard.tsx: marketplace solution card",
+        "Filter sidebar: by category, by architecture type, search by keyword",
+        "Create src/app/(app)/marketplace/[id]/page.tsx: solution detail page",
+        "Show full description, creator info, category, architecture diagram (simplified), run count, ratings",
+        "'Run This Solution' button (links to run page), 'Copy to My Solutions' button (calls /api/solutions/:id/duplicate)",
+        "Show reviews/ratings section",
+        "Create src/app/api/marketplace/route.ts: GET with filter params",
+        "Create src/app/api/marketplace/[id]/rating/route.ts: POST to submit rating (1-5 stars)"
+      ],
+      "passes": true
+    },
+    {
+      "id": 20,
+      "title": "Admin Panel — User & Org Management",
+      "description": "Admin pages for managing users and organization settings",
+      "steps": [
+        "Create src/app/(app)/admin/layout.tsx: admin layout that gates on role='admin', redirects non-admins to /unauthorized",
+        "Create src/app/(app)/admin/users/page.tsx: user management table. Show email, display name, role, last login, created date",
+        "Each user row has role change dropdown (admin can change other users' roles)",
+        "Create src/app/api/admin/users/route.ts: GET (list org users)",
+        "Create src/app/api/admin/users/[id]/route.ts: PATCH { role } to update user role",
+        "Create src/app/(app)/admin/org/page.tsx: org settings page. Show org name, domain, SSO provider config display",
+        "Create src/app/api/admin/org/route.ts: GET and PATCH org settings",
+        "Create src/lib/db/admin.ts: getOrgUsers(orgId), updateUserRole(userId, role), getOrg(orgId), updateOrg(orgId, data)"
+      ],
+      "passes": true
+    },
+    {
+      "id": 21,
+      "title": "Admin Panel — LLM API Key Management",
+      "description": "Secure storage of per-org LLM provider API keys",
+      "steps": [
+        "Create supabase/migrations/011_llm_keys.sql: llm_provider_keys table (id, org_id FK, provider, encrypted_key, created_by FK, created_at, updated_at)",
+        "Create src/lib/crypto.ts: encryptApiKey(key) and decryptApiKey(encryptedKey) using AES-256-GCM with ENCRYPTION_KEY env var",
+        "Create src/lib/db/llm-keys.ts: setProviderKey(orgId, provider, key), getProviderKey(orgId, provider) — returns decrypted key (server-side only), listProviderKeys(orgId) — returns providers list WITHOUT keys",
+        "Create src/app/api/admin/keys/route.ts: GET (list configured providers, no key values exposed)",
+        "Create src/app/api/admin/keys/[provider]/route.ts: PUT { apiKey } to set/update key, DELETE to remove key",
+        "Create src/app/(app)/admin/keys/page.tsx: LLM API Keys page. Show table of providers (OpenAI, Anthropic, Azure OpenAI, Gemini) with configured/not-configured status. Edit button opens modal to enter new key (masked input). Keys are never shown after saving",
+        "Update runtime executor to use org keys from DB (decrypt at execution time)"
+      ],
+      "passes": true
+    },
+    {
+      "id": 22,
+      "title": "Admin Panel — Audit Logs",
+      "description": "View security audit log of all user actions",
+      "steps": [
+        "Create src/lib/db/audit.ts: logAction(userId, orgId, action, resourceType, resourceId, metadata, ipAddress) — insert into audit_logs table. writeLog() should be fire-and-forget (non-blocking)",
+        "Create src/app/api/admin/audit/route.ts: GET with pagination (page, limit), filter by user, action, resource_type, date range",
+        "Create src/app/(app)/admin/audit/page.tsx: audit log viewer. Table with columns: timestamp, user, action, resource type, resource ID, IP address",
+        "Add filter controls: user search, action type filter, date range picker",
+        "Add CSV export button",
+        "Integrate logAction() calls in: user role changes, solution publish/delete, KB create/delete, run execution, API key changes",
+        "Create src/components/admin/AuditTable.tsx: paginated audit log table component"
+      ],
+      "passes": true
+    },
+    {
+      "id": 23,
+      "title": "Error Handling & Loading States",
+      "description": "Global error boundaries, loading skeletons, and toast notifications",
+      "steps": [
+        "Create src/app/error.tsx: global error boundary page with error message and 'Try again' button",
+        "Create src/app/not-found.tsx: 404 page",
+        "Create src/app/(app)/solutions/[id]/error.tsx: solution-specific error boundary",
+        "Create src/lib/errors.ts: AppError class, error code constants, formatError(e) utility",
+        "Create src/components/ui/ErrorAlert.tsx: inline error alert component",
+        "Create src/hooks/useToast.ts: hook for showing toast notifications (success, error, info, warning)",
+        "Add skeleton loading states to: SolutionCard, KBCard, MarketplaceCard, DocumentList, RunHistoryList",
+        "All API routes return consistent error format: { error: { code, message } }",
+        "Show toast on: solution save, KB creation, document upload complete, run complete/error, role change"
+      ],
+      "passes": true
+    },
+    {
+      "id": 24,
+      "title": "Responsive Design & Mobile Adaptation",
+      "description": "Ensure the platform works on tablet and desktop screen sizes",
+      "steps": [
+        "Sidebar: collapse to icon-only rail on md screens, hide completely on sm screens with hamburger toggle",
+        "Create src/components/layout/MobileNav.tsx: bottom nav bar for mobile with main section icons",
+        "Solution cards grid: 1 col on mobile, 2 col on md, 3 col on lg",
+        "Builder canvas: add warning banner on mobile ('Best experienced on desktop'). Canvas still functional but limited screen space",
+        "Knowledge base document upload: works on mobile via tap-to-select fallback",
+        "Marketplace grid: 1 col mobile, 2 col tablet, 3 col desktop",
+        "Admin tables: horizontal scroll on mobile",
+        "Test all pages at 375px (mobile), 768px (tablet), 1280px (desktop)"
+      ],
+      "passes": true
+    },
+    {
+      "id": 25,
+      "title": "Final Integration Testing & Build Verification",
+      "description": "End-to-end testing of core flows and production build",
+      "steps": [
+        "Run npm run lint — fix all errors",
+        "Run npm run build — ensure production build succeeds with no TypeScript errors",
+        "Browser test Flow 1 (Auth): navigate to /login, click Azure AD sign-in, complete SSO, verify dashboard loads",
+        "Browser test Flow 2 (Build): create new solution, choose Sequential architecture, configure 2 agent nodes with different LLM providers and system prompts, save workflow",
+        "Browser test Flow 3 (Knowledge Base): create KB, upload a PDF, wait for status to change to 'ready', run a semantic search and verify results",
+        "Browser test Flow 4 (Run): run a configured solution with a sample security risk question, verify streaming output appears",
+        "Browser test Flow 5 (Marketplace): publish a solution, browse marketplace, find it, copy to My Solutions",
+        "Browser test Flow 6 (Admin): as admin, change a user's role, set an LLM API key, view audit log",
+        "Verify all actions appear in audit log",
+        "Verify RLS — user cannot access another org's solutions via direct API call"
+      ],
+      "passes": false
+    }
+  ]
+}

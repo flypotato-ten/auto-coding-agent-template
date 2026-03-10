@@ -1,0 +1,435 @@
+## 2026-03-10 - Task: Dashboard Home Page
+
+### What was done:
+- Created src/lib/db/dashboard.ts: getDashboardStats() runs 5 parallel Supabase queries for solutions count, KB count, total runs, marketplace count, last 5 runs
+- Replaced placeholder src/app/(app)/page.tsx with full dashboard: welcome header, 4 stat cards, Quick Actions, Recent Activity, Getting Started guide (new users only)
+- Status icons with correct colors: CheckCircle2 (green for completed), Loader2 (blue spinning for running), XCircle (red for failed)
+- Each run links to solution history page
+
+### Testing:
+- npm run build succeeds with no TypeScript errors
+- Dashboard is a dynamic server component (ƒ /) — requires DB connection to fully test
+
+### Notes:
+- Supabase join on solutions table returns array (not single object) for relationship query — handled with Array.isArray check
+
+## 2026-03-10 - Task: App Shell & Navigation Layout
+
+### What was done:
+- Created src/app/(app)/layout.tsx: authenticated layout that calls getTypedSession(), redirects to /login if not authenticated, renders Sidebar + Header + main content
+- Moved root page.tsx to src/app/(app)/page.tsx (placeholder for Task 7 dashboard)
+- Created src/components/layout/Sidebar.tsx: collapsible sidebar (w-64 expanded, w-16 collapsed), active route highlighting, admin nav item shown only for admin role
+- Created src/components/layout/Header.tsx: top bar with page title, notification bell, UserMenu
+- Created src/components/layout/UserMenu.tsx: dropdown with user avatar, name, email, role badge, sign out
+- Created src/components/ui/Spinner.tsx: animated loading spinner with sm/md/lg sizes
+- shadcn v4 already created: badge, button, card, input, textarea, select, dialog, dropdown-menu, tooltip, skeleton, avatar, sonner
+
+### Testing:
+- npm run build succeeds; dashboard route at / is dynamic (server-rendered, auth-protected)
+
+### Notes:
+- shadcn v4 uses @base-ui/react — no asChild prop on Button or DropdownMenuTrigger; pass className directly to DropdownMenuTrigger
+- Server Component pages cannot use buttonVariants() — use inline Tailwind classes or Link with class string
+
+## 2026-03-10 - Task: Authentication Middleware & RBAC
+
+### What was done:
+- Route protection already handled by src/proxy.ts from Task 4 (redirects to /login for unauthenticated)
+- Created src/lib/auth/rbac.ts: Action type union, ROLE_PERMISSIONS matrix (admin/builder/viewer), hasPermission(), getRolePermissions(), ROLE_LABELS
+- Created src/lib/auth/session.ts: getTypedSession() fetches NextAuth session + DB user, returns TypedSession with userId/role/orgId
+- Created src/components/auth/AuthGuard.tsx: client component checking role via hasPermission() and role hierarchy; redirects to /unauthorized
+- Created src/app/unauthorized/page.tsx: 403 page with ShieldX icon and Back to Dashboard link
+- API route role checks will be implemented inline using getTypedSession() as routes are created
+
+### Testing:
+- npm run build succeeds; /unauthorized route verified in build output
+
+### Notes:
+- shadcn v4 Button uses @base-ui/react, has no asChild prop — use Link with inline Tailwind classes for server-rendered anchor buttons
+- buttonVariants is a client-only function in this shadcn version — cannot call from Server Components
+
+## 2026-03-10 - Task: Enterprise SSO Authentication — Azure AD
+
+### What was done:
+- Created src/auth.ts: NextAuth v5 with MicrosoftEntraID provider; uses issuer URL with AZURE_AD_TENANT_ID; signIn callback upserts user via upsertUserFromSSO(); denies login if org not found for email domain
+- Created src/app/api/auth/[...nextauth]/route.ts: exports GET/POST from handlers
+- Created src/components/auth/SignInButton.tsx: client component calling signIn(provider)
+- Created src/app/login/page.tsx: full-screen centered login with AgentForge branding, Azure AD primary button, Ping Identity secondary button
+- Renamed src/middleware.ts → src/proxy.ts and updated function export to `proxy` per Next.js 16 convention
+
+### Testing:
+- npm run build succeeds; routes verified in build output
+- Login page renders at /login; API route at /api/auth/[...nextauth]
+
+### Notes:
+- Next.js 16 renamed `middleware` file to `proxy` — must export `proxy` function not `middleware`
+- Real Azure AD SSO requires AZURE_AD_CLIENT_ID, AZURE_AD_CLIENT_SECRET, AZURE_AD_TENANT_ID in .env.local
+- Ping Identity provider is a placeholder — requires additional next-auth SAML provider setup
+
+## 2026-03-10 - Task: Supabase Client Setup
+
+### What was done:
+- Created src/lib/supabase/server.ts: createServerClient() (anon key + session cookies) and createServiceClient() (service role key, bypasses RLS)
+- Created src/lib/supabase/client.ts: singleton createBrowserClient() for Client Components
+- Created src/lib/supabase/middleware.ts: updateSession() that refreshes JWT and returns user
+- Created src/middleware.ts: session refresh on every request; redirects unauthenticated users to /login; redirects logged-in users away from /login
+- Created src/lib/db/users.ts: getUserById(), createUser(), updateUser(), upsertUserFromSSO(), getOrgByDomain(), setUserRole()
+
+### Testing:
+- npm run build succeeds with no TypeScript errors
+- Middleware matcher configured to skip Next.js static assets
+
+### Notes:
+- createServiceClient() used only in upsertUserFromSSO and admin operations — never expose service key to client
+- upsertUserFromSSO uses email as conflict key; updates last_login_at on every login
+
+## 2026-03-10 - Task: Supabase Database Schema
+
+### What was done:
+- Created supabase/migrations/001_enable_pgvector.sql: uuid-ossp + vector extensions
+- Created supabase/migrations/002_organizations.sql: organizations table with SSO config
+- Created supabase/migrations/003_users.sql: users table with user_role enum (admin/builder/viewer)
+- Created supabase/migrations/004_solutions.sql: solutions table with all enum types (category, visibility, status, architecture)
+- Created supabase/migrations/005_workflow.sql: workflow_nodes and workflow_edges tables with node_type and llm_provider enums
+- Created supabase/migrations/006_knowledge_bases.sql: knowledge_bases, kb_documents, document_chunks (vector(1536)), data_connectors tables
+- Created supabase/migrations/007_runs.sql: solution_runs and langgraph_checkpoints tables
+- Created supabase/migrations/008_audit.sql: audit_logs table for security compliance
+- Created supabase/migrations/009_indexes.sql: indexes on all FK columns + IVFFlat index on document_chunks.embedding (cosine, lists=100)
+- Created supabase/migrations/010_rls.sql: RLS policies with current_user_org_id() and current_user_role() helpers; org isolation + visibility='public' rules
+- Created supabase/seed.sql: demo org, admin user, and builder user for local dev
+- All migrations fully commented
+
+### Testing:
+- SQL reviewed for correctness; will be applied to Supabase when configured
+- RLS policies enforce org isolation per architecture requirements
+
+### Notes:
+- document_chunks.embedding uses vector(1536) for text-embedding-3-small
+- langgraph_checkpoints uses thread_id=run_id for HITL pause/resume
+- Seed data uses fixed UUIDs for predictable local dev
+
+## 2026-03-10 - Task: Project Foundation & Dependencies
+
+### What was done:
+- Created Next.js 16.1.6 app with TypeScript, Tailwind CSS v4, App Router, src-dir, @/* import alias
+- Installed all required dependencies: next-auth@beta, @auth/supabase-adapter, @supabase/supabase-js, @supabase/ssr, @xyflow/react, clsx, tailwind-merge, lucide-react, class-variance-authority, react-hook-form, zod, @hookform/resolvers
+- Installed LangGraph + LangChain.js: @langchain/langgraph, @langchain/core, @langchain/openai, @langchain/anthropic, @langchain/google-genai, @langchain/community (with --legacy-peer-deps due to peer dep conflict in @langchain/community)
+- Initialized shadcn/ui v4 with defaults; installed components: button, card, input, label, textarea, select, dialog, dropdown-menu, tabs, sonner (replaces deprecated toast), tooltip, badge, separator, skeleton, avatar
+- Verified .mcp.json exists at agentforge-app/.mcp.json with shadcn, magic, playwright MCP servers
+- .env.local already present with all required environment variable keys
+- Applied security-professional dark navy palette to globals.css (HSL values from ui_ux_design.md): deep navy background, electric blue primary, green accent, amber warning, red destructive
+- src/lib/utils.ts already created by shadcn init with cn() helper using clsx + tailwind-merge
+- Created src/types/index.ts with all shared TypeScript types: User, Organization, Solution, WorkflowNode, WorkflowEdge, KnowledgeBase, KBDocument, DataConnector, SolutionRun, AuditLog
+
+### Testing:
+- npm run build succeeds with no TypeScript errors
+
+### Notes:
+- Using npm_config_cache=/tmp/npm-cache for all npm commands due to root-owned files in ~/.npm cache
+- @langchain/community requires --legacy-peer-deps due to @browserbasehq/stagehand peer dep conflict
+- shadcn v4 uses Tailwind v4 and oklch colors by default; overrode with hsl() values for our custom palette
+- toast component deprecated in shadcn v4; using sonner instead
+
+## 2026-03-10 - Task: Solutions CRUD — API & Data Layer
+
+### What was done:
+- Created src/lib/db/solutions.ts: createSolution(), getSolutions(), getSolutionById(), updateSolution(), deleteSolution(), publishSolution(), duplicateSolution() (deep copies nodes and edges with ID remapping)
+- Created src/lib/db/workflow.ts: saveWorkflow() (full replace delete+insert), getWorkflow() (parallel fetch nodes+edges)
+- Created src/app/api/solutions/route.ts: GET (list with status/category filters) and POST (create)
+- Created src/app/api/solutions/[id]/route.ts: GET, PATCH, DELETE with ownership verification
+- Created src/app/api/solutions/[id]/publish/route.ts: POST sets status=published, visibility, published_at
+- Created src/app/api/solutions/[id]/duplicate/route.ts: POST deep-copies solution for authenticated user
+- Created src/app/api/solutions/[id]/workflow/route.ts: GET and PUT for workflow canvas state
+- All mutations write fire-and-forget audit_logs entries
+
+### Testing:
+- npm run build succeeds with no TypeScript errors
+- All 8 API routes appear in build output
+
+### Notes:
+- Supabase client .insert() returns PromiseLike not Promise — use .then(undefined, cb) instead of .catch()
+- duplicateSolution builds idMap after insert to remap edge source/target IDs correctly
+
+## 2026-03-10 - Task: Solutions List Page
+
+### What was done:
+- Created src/app/(app)/solutions/page.tsx: server component with status filter tabs (All/Draft/Published/Archived), 3-column grid layout, empty state with CTA
+- Created src/components/solution/SolutionCard.tsx: card with title, description, badges (status, category, architecture, visibility), action menu (Edit/Run/Duplicate/Archive/Delete), skeleton loading state
+- Created src/components/solution/SolutionStatusBadge.tsx: color-coded badge for draft/published/archived
+
+### Testing:
+- npm run build succeeds; /solutions route in build output
+
+### Notes:
+- shadcn v4 DropdownMenuItem does not support asChild; used onClick+router.push() for navigation items
+
+## 2026-03-10 - Task: LangGraph Agent Execution Runtime
+
+### What was done:
+- Created src/lib/crypto.ts: encryptApiKey() and decryptApiKey() using AES-256-GCM with random IV and auth tag
+- Created src/lib/runtime/checkpointer.ts: SupabaseSaver extends BaseCheckpointSaver (from @langchain/langgraph-checkpoint); implements getTuple(), put(), list(), putWrites(), deleteThread()
+- Created src/lib/runtime/llm-factory.ts: getLangChainModel() returns ChatOpenAI/ChatAnthropic/ChatGoogleGenerativeAI
+- Created src/lib/runtime/kb-retriever.ts: retrieveKBContext() builds SupabaseVectorStore retriever and formats docs as numbered list
+- Created src/lib/runtime/node-builder.ts: buildAgentNode() substitutes {kb_context}/{user_input}/{previous_output}, calls LLM, returns updated nodeOutputs
+- Created src/lib/runtime/router-builder.ts: buildRouterNode() uses LLM classification prompt to return next node ID
+- Created src/lib/runtime/graph-compiler.ts: compileWorkflow() uses Annotation.Root() API; casts node IDs with NodeId type alias; compiles with SupabaseSaver; returns {graph, hitlNodeIds}
+- Created src/app/api/solutions/[id]/run/route.ts: POST handler with SSE streaming (node_start/token/node_complete/interrupt/done/error events)
+- Created src/app/api/runs/[runId]/route.ts: GET run record
+- Created src/app/api/runs/[runId]/resume/route.ts: POST resume HITL checkpoint
+
+### Testing:
+- npm run build succeeds with no TypeScript errors
+
+### Notes:
+- @langchain/langgraph uses Annotation.Root() API (not {channels: {...}} constructor)
+- RunnableConfig must be imported from @langchain/core/runnables (not @langchain/langgraph)
+- BaseCheckpointSaver from @langchain/langgraph-checkpoint requires putWrites() and deleteThread() stubs
+- StateGraph node IDs must be typed as '__start__' literal; use nid() type assertion helper
+- Supabase PromiseLike does not have .catch(); use .then(undefined, cb) for fire-and-forget error handling
+
+## 2026-03-10 - Task: New Solution Setup Page
+
+### What was done:
+- Created src/app/(app)/solutions/new/page.tsx: server component with auth/permission guard, renders NewSolutionForm
+- Created src/components/solution/NewSolutionForm.tsx: 2-step form with progress indicator; Step 1 (title, description, category, visibility); Step 2 (architecture selection); calls POST /api/solutions then redirects to builder
+- Created src/components/solution/ArchitectureCard.tsx: clickable card with icon, name, description, and ASCII/JSX topology diagram preview for all 6 architecture types
+
+### Testing:
+- npm run build succeeds; /solutions/new route in build output
+
+### Notes:
+- All 6 architectures have diagram previews (single, sequential, parallel, hierarchical, router, custom/blank)
+
+## 2026-03-10 - Task: Agent Workflow Builder Canvas
+
+### What was done:
+- Created src/app/(app)/solutions/[id]/edit/page.tsx: client component that fetches solution+workflow, renders WorkflowCanvas; includes mobile warning banner
+- Created src/components/builder/WorkflowCanvas.tsx: ReactFlow canvas with all 5 node types registered, architecture templates, auto-save (2s debounce), save status indicator, MiniMap, Controls, Background
+- Created src/components/builder/nodes/AgentNode.tsx: agent card with provider badge, model, prompt preview, configure button, HITL indicator
+- Created src/components/builder/nodes/InputNode.tsx: green-bordered start node
+- Created src/components/builder/nodes/OutputNode.tsx: blue-bordered end node
+- Created src/components/builder/nodes/RouterNode.tsx: amber-bordered router with 2 source handles
+- Created src/components/builder/nodes/AggregatorNode.tsx: purple-bordered aggregator with 2 target handles
+- Created src/components/builder/Toolbar.tsx: left sidebar with click-to-add node palette
+- Architecture templates generate pre-wired node graphs for single/sequential/parallel/hierarchical/router
+
+### Testing:
+- npm run build succeeds; /solutions/[id]/edit route in build output
+
+### Notes:
+- Toolbar uses click-to-add (not drag-to-add) for simplicity; nodes appear at random position in canvas center
+- WorkflowCanvas is a client component ('use client'); builder page is also client-side for reactivity
+
+## 2026-03-10 - Task: Node Configuration Panel
+
+### What was done:
+- Created src/components/builder/NodeConfigPanel.tsx: slide-out right panel (w-80); sections: label, LLM provider/model, system prompt, temperature slider, max tokens, KB multi-select, HITL toggle, advanced (JSON schema)
+- Created src/components/builder/LLMProviderSelect.tsx: 4-provider grid selector with model dropdown per provider
+- Created src/components/builder/SystemPromptEditor.tsx: textarea with char count + clickable variable hint buttons ({user_input}, {kb_context}, {previous_output})
+- Created src/components/builder/KBAttachSelect.tsx: searchable KB list with checkbox multi-select; fetches from /api/knowledge; shows selected as chips
+- Updated WorkflowCanvas to expose onNodesChangeProp for external node state tracking
+- Updated edit page to show NodeConfigPanel when a node is selected, and apply config on save
+
+### Testing:
+- npm run build succeeds
+
+### Notes:
+- HITL toggle updates node_config.hitl_enabled; LangGraph runtime reads this in Task 17
+- KB list fetches from /api/knowledge which will be created in Task 13
+
+## 2026-03-10 - Task: Knowledge Base — API & Data Layer
+
+### What was done:
+- Created src/lib/db/knowledge.ts: createKB, getKBs, getKBById, updateKB, deleteKB, addDocument, deleteDocument, getDocuments
+- Created src/lib/storage/documents.ts: uploadToStorage, deleteFromStorage, getSignedUrl, downloadFromStorage (uses Supabase Storage 'knowledge' bucket)
+- Created src/app/api/knowledge/route.ts: GET (list with owner+org+visibility filter), POST (create)
+- Created src/app/api/knowledge/[id]/route.ts: GET, PATCH, DELETE with ownership checks
+- Created src/app/api/knowledge/[id]/documents/route.ts: GET (list), POST (multipart upload → storage → DB → trigger process pipeline)
+- Created src/app/api/knowledge/[id]/documents/[docId]/route.ts: DELETE (remove from storage + DB)
+- Created src/app/api/knowledge/[id]/search/route.ts: POST with OpenAI embedding + pgvector RPC
+
+### Testing:
+- npm run build succeeds; all 5 knowledge API routes in build output
+
+### Notes:
+- Document upload triggers /api/knowledge/:id/documents/process fire-and-forget (created in Task 14)
+- Search uses match_chunks RPC function (created in migration 012_match_chunks_fn.sql in Task 14)
+
+## 2026-03-10 - Task: Knowledge Base — Document Processing Pipeline
+
+### What was done:
+- Created src/lib/processing/loader.ts: downloads from Supabase Storage to tmp file, uses PDFLoader/DocxLoader from @langchain/community, simple fs.readFileSync for TXT/CSV
+- Created src/lib/processing/splitter.ts: RecursiveCharacterTextSplitter from @langchain/textsplitters (chunkSize:512, overlap:50)
+- Created src/lib/processing/vectorstore.ts: upsertChunks via SupabaseVectorStore.fromDocuments, embedQuery for query-time embedding, getVectorStoreRetriever for LangGraph runtime
+- Created supabase/migrations/012_match_chunks_fn.sql: match_chunks(query_embedding, match_threshold, match_count, filter_kb_id) using cosine similarity (<=>)
+- Created src/lib/processing/pipeline.ts: full orchestration pending→processing→(load+split+embed)→ready; updates KB aggregates; handles errors
+- Created src/app/api/knowledge/[id]/documents/process/route.ts: fires pipeline async and returns immediately
+
+### Testing:
+- npm run build succeeds; /api/knowledge/[id]/documents/process route in build output
+
+### Notes:
+- TextLoader not in @langchain/community; using fs.readFileSync directly for TXT/CSV
+- @langchain/textsplitters is the correct package (not langchain/text_splitter which no longer exists)
+- Loaders require temp file on disk; tempfile is cleaned up in finally block
+
+## 2026-03-10 - Task: Knowledge Base — Data Connectors
+
+### What was done:
+- Created src/lib/connectors/types.ts: ConnectorConfig, ConnectorPage, ConnectorSyncResult interfaces
+- Created src/lib/connectors/web-crawl.ts: crawlUrls() fetches URLs with 15s timeout, strips HTML, extracts title
+- Created src/lib/connectors/confluence.ts: fetchConfluencePages() uses Confluence REST API v2 with Basic Auth, paginates through all pages
+- Created src/lib/connectors/sharepoint.ts: fetchSharePointFiles() uses Microsoft Graph API with Bearer token; stub returns placeholder if no token
+- Created src/lib/connectors/sync.ts: syncConnector() orchestrates fetch+pipeline for all connector types, updates last_synced_at
+- Created src/app/api/knowledge/[id]/connectors/route.ts: GET (list), POST (add connector)
+- Created src/app/api/knowledge/[id]/sync/route.ts: POST triggers fire-and-forget sync for connectors
+
+### Testing:
+- npm run build succeeds; all connector routes in build output
+
+### Notes:
+- SharePoint connector returns stub content without real OAuth token (requires Azure AD app registration)
+- Web crawl uses fetch() with AbortSignal.timeout() for per-URL timeout
+
+## 2026-03-10 - Task: Knowledge Base — UI Pages
+
+### What was done:
+- Created src/app/(app)/knowledge/page.tsx: KB list with 3-col grid, empty state CTA, Suspense skeleton
+- Created src/components/knowledge/KBCard.tsx: card with status badge (empty/processing/ready/error), doc count, chunk count, last updated; skeleton loading state
+- Created src/app/(app)/knowledge/new/page.tsx: client form for name, description, visibility
+- Created src/app/(app)/knowledge/[id]/page.tsx: KB detail page with document list, upload, semantic search tester, connector panel
+- Created src/components/knowledge/DocumentList.tsx: per-document status icons, file size, chunk count, delete button
+- Created src/components/knowledge/DocumentUpload.tsx: drag-and-drop zone, file validation, progress tracking
+- Created src/components/knowledge/KBSearch.tsx: search form → /api/knowledge/[id]/search, collapsible result cards with similarity score
+- Created src/components/knowledge/ConnectorPanel.tsx: connector list with add/sync UI
+
+### Testing:
+- npm run build succeeds; /knowledge, /knowledge/[id], /knowledge/new all in build output
+
+## 2026-03-10 - Task: Solution Run Page (Task 18)
+
+### What was done:
+- Created src/components/run/InputForm.tsx: textarea + Run button, form submission calls onSubmit callback
+- Created src/components/run/HITLApprovalPanel.tsx: shown on SSE 'interrupt' event; Approve/Reject buttons POST to /api/runs/:runId/resume; streams continue after resume
+- Created src/components/run/ExecutionPanel.tsx: SSE consumer using fetch POST + ReadableStream; node-by-node progress display with streaming tokens; handles all SSE event types (node_start/token/node_complete/interrupt/done/error); shows HITL panel when needed
+- Created src/components/run/RunHistoryList.tsx: past runs list with status icons (CheckCircle2/Loader2/XCircle/Clock), duration, date
+- Created src/app/(app)/solutions/[id]/run/page.tsx: split layout (input left, execution right); loads solution by ID
+- Created src/app/(app)/solutions/[id]/history/page.tsx: run history table with pagination
+- Created src/app/api/solutions/[id]/runs/route.ts: GET run history for a solution
+
+### Testing:
+- npm run build succeeds; all run routes in build output
+
+### Notes:
+- EventSource only supports GET; used fetch() POST + ReadableStream reader for SSE consumption
+- HITL panel re-opens SSE stream after resume to continue receiving output
+
+## 2026-03-10 - Task: Solution Marketplace (Task 19)
+
+### What was done:
+- Created src/components/marketplace/MarketplaceCard.tsx: card with title, description, category/architecture badges, creator, run count, star rating, publish date; skeleton loading state
+- Created src/app/(app)/marketplace/page.tsx: browse page with filter sidebar (category, architecture, search); 3-col grid; fetch from /api/marketplace with filter params
+- Created src/app/(app)/marketplace/[id]/page.tsx: solution detail with full description, creator info, stats, 'Run This Solution' link, 'Copy to My Solutions' button, ratings section
+- Created src/app/api/marketplace/route.ts: GET with category/architecture/search filter params; queries solutions where visibility='public' OR (visibility='org' AND org_id matches)
+- Created src/app/api/marketplace/[id]/rating/route.ts: POST rating (1-5 stars); updates avg_rating in solutions table
+
+### Testing:
+- npm run build succeeds; /marketplace and /marketplace/[id] routes in build output
+
+## 2026-03-10 - Task: Admin Panel — User & Org Management (Task 20)
+
+### What was done:
+- Created src/app/(app)/admin/layout.tsx: admin gate; redirects non-admins to /unauthorized
+- Created src/lib/db/admin.ts: getOrgUsers(), updateUserRole(), getOrg(), updateOrg()
+- Created src/components/admin/UserRoleSelector.tsx: inline role dropdown with PATCH to /api/admin/users/:id; updates state optimistically
+- Created src/app/(app)/admin/users/page.tsx: user table with email, display name, role selector, last login, joined date; current user shows static badge (cannot change own role)
+- Created src/app/(app)/admin/org/page.tsx: org settings display (name, domain, SSO provider, SSO config)
+- Created src/app/api/admin/users/route.ts: GET org users (admin only)
+- Created src/app/api/admin/users/[id]/route.ts: PATCH role update (admin only)
+- Created src/app/api/admin/org/route.ts: GET and PATCH org settings (admin only)
+
+### Testing:
+- npm run build succeeds; all admin routes in build output
+
+## 2026-03-10 - Task: Admin Panel — LLM API Key Management (Task 21)
+
+### What was done:
+- Created supabase/migrations/011_llm_keys.sql: llm_provider_keys table with org_id, provider, encrypted_key, created_by
+- Created src/lib/crypto.ts: encryptApiKey() and decryptApiKey() using Node.js crypto AES-256-GCM with random IV
+- Created src/lib/db/llm-keys.ts: setProviderKey(), getProviderKey() (decrypted, server-only), listProviderKeys() (no key values), deleteProviderKey()
+- Created src/app/api/admin/keys/route.ts: GET configured providers (admin only)
+- Created src/app/api/admin/keys/[provider]/route.ts: PUT set/update key, DELETE remove key (both admin only, audit logged)
+- Created src/app/(app)/admin/keys/page.tsx: table of OpenAI/Anthropic/Azure OpenAI/Gemini with configured status
+- Created src/components/admin/KeyManager.tsx: inline key editor with masked input (eye toggle), save/cancel/delete
+
+### Testing:
+- npm run build succeeds; /admin/keys route in build output
+
+## 2026-03-10 - Task: Admin Panel — Audit Logs (Task 22)
+
+### What was done:
+- src/lib/db/audit.ts: logAction() (fire-and-forget) and getAuditLogs() with filters — already created in previous session
+- src/app/api/admin/audit/route.ts: GET with pagination/filters — already created in previous session
+- Created src/components/admin/AuditTable.tsx: paginated table with timestamp, user, action badge, resource type, resource ID, IP; CSV export via Blob URL
+- Created src/app/(app)/admin/audit/page.tsx: audit log viewer with action type + resource type filter dropdowns, clear filters link
+
+### Testing:
+- npm run build succeeds; /admin/audit route in build output; all 44 routes verified
+
+### Notes:
+- Action badge uses prefix matching (create/update/delete/login/publish) for color coding
+- CSV export uses client-side Blob URL creation and anchor click
+
+## 2026-03-10 - Task: Error Handling & Loading States (Task 23)
+
+### What was done:
+- Created src/app/error.tsx: global error boundary with AlertTriangle icon, error message, digest ID, Try again button
+- Created src/app/not-found.tsx: 404 page with FileQuestion icon and Back to Dashboard link
+- Created src/app/(app)/solutions/[id]/error.tsx: solution-specific error boundary with Try again + Back to Solutions
+- Created src/lib/errors.ts: AppError class, ErrorCodes constants, formatError(), errorResponse() utility
+- Created src/components/ui/ErrorAlert.tsx: inline dismissible error alert with destructive styling
+- Created src/hooks/useToast.ts: wrapper around sonner toast with success/error/info/warning methods
+- Added Toaster to app layout for toast notifications
+
+### Testing:
+- npm run build succeeds
+
+### Notes:
+- SolutionCard and MarketplaceCard already included skeleton loading states from prior tasks
+- useToast wraps sonner (already installed in Task 1), so no new dependencies needed
+
+## 2026-03-10 - Task: Responsive Design & Mobile Adaptation (Task 24)
+
+### What was done:
+- Created src/components/layout/MobileNav.tsx: fixed bottom navigation bar (hidden on sm+); shows main section icons (Home/Solutions/Knowledge/Market/Admin)
+- Updated app layout: sidebar hidden on mobile (hidden sm:flex), main content has pb-20 on mobile for bottom nav clearance, px-4 on mobile vs px-6 on desktop
+- MobileNav is only visible on sm breakpoint and below (display: flex for mobile, hidden for sm+)
+
+### Testing:
+- npm run build succeeds
+
+### Notes:
+- Builder canvas mobile warning was already added in Task 11 (edit page.tsx)
+- Admin tables use overflow-x-auto from prior implementation
+- Responsive grid classes (grid-cols-1 sm:grid-cols-2 lg:grid-cols-3) already applied in solutions/marketplace/KB list pages
+
+## 2026-03-10 - Task: Final Integration Testing & Build Verification (Task 25)
+
+### What was done:
+- npm run build succeeds with no TypeScript errors
+- All 44 routes verified in production build output:
+  - 7 admin pages + API routes
+  - 6 solutions routes
+  - 6 knowledge base routes
+  - 2 marketplace routes
+  - 3 run/resume routes
+  - Auth, login, dashboard, unauthorized
+- All core flows implemented: Auth (Azure AD SSO), Build (workflow canvas), Knowledge Base (upload+process+search), Run (SSE streaming+HITL), Marketplace (browse+copy), Admin (users+keys+audit)
+
+### Testing:
+- Production build clean with 0 TypeScript errors
+- Browser testing requires Supabase + Azure AD configuration (credentials in .env.local)
+
+### Notes:
+- Real end-to-end testing requires: Supabase project, Azure AD app registration, LLM API keys
+- See BLOCKING conditions in CLAUDE.md for environment setup requirements
